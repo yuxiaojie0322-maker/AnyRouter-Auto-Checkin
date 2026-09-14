@@ -1,9 +1,13 @@
-name: Ayrouter Daily Check-in
+name: Anyrouter Daily Check-in
 
 on:
+  push:
+    branches:
+      - main
   schedule:
-    - cron: '0 2 * * *'
-  # 支持手动触发
+    # 避开 0 点或整点执行高峰，设为每天 UTC 02:18 (北京时间 10:18)
+    - cron: '18 2 * * *'
+  # 支持在 GitHub 页面手动点击触发
   workflow_dispatch:
 
 permissions:
@@ -18,21 +22,22 @@ jobs:
     steps:
       # ---------- 检出代码 ----------
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v4
 
-      # ---------- 安装 Python ----------
+      # ---------- 配置 Python ----------
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: 'pip'
 
-      # ---------- 安装 Python 依赖 和 Playwright 浏览器  ----------
-      - name: Install Python dependencies
+      # ---------- 安装依赖 ----------
+      - name: Install dependencies
         run: |
-          pip install requests playwright pynacl
+          pip install --no-cache-dir requests playwright
           playwright install --with-deps chromium
 
-      # ---------- 运行领币脚本 ----------
+      # ---------- 运行签到脚本 ----------
       - name: Run check-in script
         env:
           USER_ID: ${{ secrets.USER_ID }}
@@ -40,18 +45,19 @@ jobs:
           TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
           TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
         run: python app.py
-        
-      - name: 🧹 clear old run jobs
+
+      # ---------- 自动清理旧运行日志 (保留最新 5 条) ----------
+      - name: Clean old workflow runs
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=100 --json databaseId --jq '.[].databaseId')
+          runs=$(gh run list --workflow="${{ github.workflow }}" --limit=50 --json databaseId --jq '.[].databaseId')
           count=0
           for run_id in $runs; do
             count=$((count + 1))
-            if [ $count -gt 1 ]; then
-              echo "删除运行记录: $run_id"
-              gh run delete $run_id || true
+            if [ $count -gt 5 ]; then
+              echo "清理旧记录: $run_id"
+              gh run delete "$run_id" || true
             fi
           done

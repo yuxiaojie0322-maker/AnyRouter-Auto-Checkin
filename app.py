@@ -123,35 +123,11 @@ def send_telegram(message: str) -> bool:
 
 def get_waf_cookies() -> dict:
     """
-    优先通过轻量级 HTTP 请求获取 WAF Cookie (acw_tc, cdn_sec_tc)；
-    若未获取全或遇到拦截，再回退到 Playwright 浏览器模拟。
+    使用 Playwright 浏览器访问登录页面，通过浏览器执行 JS 挑战获取 WAF Cookie (acw_sc__v2, acw_tc, cdn_sec_tc)。
     """
     waf_cookies = {}
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
-        ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    }
+    log("INFO", f"启动 Playwright 浏览器获取 WAF Cookie (访问 {SITE_URL}/login)...")
 
-    # 1. 尝试直接通过 requests 抓取登录页响应头中的 Set-Cookie
-    try:
-        log("INFO", "尝试直接请求登录页获取 WAF Cookie...")
-        resp = requests.get(f"{SITE_URL}/login", headers=headers, timeout=15)
-        for name in WAF_COOKIE_NAMES:
-            if name in resp.cookies:
-                waf_cookies[name] = resp.cookies.get(name)
-
-        if "acw_tc" in waf_cookies or "cdn_sec_tc" in waf_cookies:
-            log("INFO", f"通过直接请求成功获取 WAF Cookie: {list(waf_cookies.keys())}")
-            # 如果无需 JS 挑战计算 acw_sc__v2，直接返回
-            return waf_cookies
-    except Exception as e:
-        log("WARN", f"直接获取 WAF Cookie 失败，切换到 Playwright: {e}")
-
-    # 2. 回退使用 Playwright
-    log("INFO", "启动 Playwright 浏览器获取完整 WAF Cookie...")
     try:
         from playwright.sync_api import sync_playwright
         with sync_playwright() as p:
@@ -166,15 +142,19 @@ def get_waf_cookies() -> dict:
             )
             context = browser.new_context(
                 viewport={"width": 1280, "height": 720},
-                user_agent=headers["User-Agent"],
+                user_agent=(
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+                ),
             )
             page = context.new_page()
 
             try:
-                page.goto(f"{SITE_URL}/login", wait_until="domcontentloaded", timeout=25000)
-                page.wait_for_timeout(3000)
+                page.goto(f"{SITE_URL}/login", wait_until="networkidle", timeout=30000)
             except Exception as e:
-                log("WARN", f"Playwright 加载页面超时或报错: {e}")
+                log("WARN", f"页面加载等待提示: {e}")
+
+            page.wait_for_timeout(3000)
 
             for cookie in context.cookies():
                 name = cookie.get("name")
@@ -184,7 +164,7 @@ def get_waf_cookies() -> dict:
 
             browser.close()
     except Exception as e:
-        log("ERROR", f"Playwright 执行异常: {e}")
+        log("ERROR", f"Playwright 获取 WAF Cookie 异常: {e}")
 
     log("INFO", f"最终获取到 WAF Cookie: {list(waf_cookies.keys())}")
     return waf_cookies
@@ -194,7 +174,7 @@ def build_headers() -> dict:
     """构建与网页端一致的 API 请求头"""
     return {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         ),
         "Accept": "application/json, text/plain, */*",
@@ -215,7 +195,12 @@ def get_user_info(session: requests.Session, headers: dict) -> dict | None:
     try:
         resp = session.get(url, headers=headers, timeout=25)
         if resp.status_code == 200:
-            data = resp.json()
+            try:
+                data = resp.json()
+            except Exception:
+                log("WARN", f"API 响应非 JSON 格式 (可能被 WAF 挑战拦截): {resp.text[:200]}")
+                return None
+
             if data.get("success"):
                 user_data = data.get("data", {})
                 return {

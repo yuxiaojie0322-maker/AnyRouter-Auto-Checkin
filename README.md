@@ -1,4 +1,4 @@
-## 🚀 Anyrouter 自动签到领额度（GitHub Actions）
+## 🚀 Anyrouter 自动签到领额度（GitHub Actions）1
 
 这是一个基于 GitHub Actions 的自动化脚本，用于定时登录自动续期 [anyrouter](https://anyrouter.top) 服务。
 
